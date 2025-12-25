@@ -30,6 +30,10 @@ from utils.knowledge_logger import (
     init_knowledge_log,
 )
 
+# 导入历史记录管理器
+from history_manager import history_manager
+
+
 # 导入ReportEngine
 try:
     from ReportEngine.flask_interface import report_bp, initialize_report_engine
@@ -923,6 +927,53 @@ atexit.register(cleanup_processes)
 def index():
     """主页"""
     return render_template('index.html')
+
+@app.route('/history')
+def history():
+    """历史记录页面"""
+    return render_template('history.html')
+
+@app.route('/api/history')
+def get_history():
+    """获取历史记录列表"""
+    try:
+        records = history_manager.get_records()
+        return jsonify({'success': True, 'records': records})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/history/<record_id>')
+def get_history_record(record_id):
+    """获取单个历史记录"""
+    try:
+        record = history_manager.get_record(record_id)
+        if record:
+            return jsonify({'success': True, 'record': record})
+        else:
+            return jsonify({'success': False, 'message': '记录不存在'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/history/<record_id>/delete', methods=['POST'])
+def delete_history_record(record_id):
+    """删除历史记录"""
+    try:
+        success = history_manager.delete_record(record_id)
+        if success:
+            return jsonify({'success': True, 'message': '记录已删除'})
+        else:
+            return jsonify({'success': False, 'message': '记录不存在'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/history/clear', methods=['POST'])
+def clear_history():
+    """清空历史记录"""
+    try:
+        history_manager.clear_records()
+        return jsonify({'success': True, 'message': '历史记录已清空'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/api/status')
 def get_status():
