@@ -12,6 +12,7 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass, asdict
 
 
+
 @dataclass
 class HistoryRecord:
     """历史记录数据结构"""
