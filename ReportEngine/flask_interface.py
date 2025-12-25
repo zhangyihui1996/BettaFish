@@ -22,6 +22,9 @@ from .agent import ReportAgent, create_agent
 from .nodes import ChapterJsonParseError
 from .utils.config import settings
 
+# 导入历史记录管理器
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from history_manager import history_manager
 
 # 创建Blueprint
 report_bp = Blueprint('report_engine', __name__)
@@ -560,6 +563,16 @@ def run_report_generation(task: ReportTask, query: str, custom_template: str = "
             'report_file': task.report_file_relative_path or task.report_file_path,
             'task': task.to_dict(),
         })
+        
+        # 保存历史记录
+        history_manager.save_record(
+            id=task.task_id,
+            query=task.query,
+            status=task.status,
+            report_file=task.report_file_path,
+            created_at=task.created_at,
+            updated_at=task.updated_at
+        )
 
     except Exception as e:
         logger.exception(f"报告生成过程中发生错误: {str(e)}")
@@ -573,6 +586,17 @@ def run_report_generation(task: ReportTask, query: str, custom_template: str = "
         with task_lock:
             if current_task and current_task.task_id == task.task_id:
                 current_task = None
+        
+        # 保存历史记录（错误情况）
+        history_manager.save_record(
+            id=task.task_id,
+            query=task.query,
+            status=task.status,
+            report_file=task.report_file_path,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+            error_message=str(e)
+        )
 
 
 @report_bp.route('/status', methods=['GET'])
