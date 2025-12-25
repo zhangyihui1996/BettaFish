@@ -15,6 +15,9 @@ import time
 import threading
 import json
 from datetime import datetime
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from MindSpider.schema.models_sa import AnalysisHistory, Base
 from queue import Queue
 from flask import Flask, render_template, request, jsonify, Response
 from flask_socketio import SocketIO, emit
@@ -23,6 +26,7 @@ import requests
 from loguru import logger
 import importlib
 from pathlib import Path
+import time
 from MindSpider.main import MindSpider
 from utils.knowledge_logger import (
     append_knowledge_log,
@@ -234,6 +238,39 @@ def write_config_values(updates):
 system_state_lock = threading.Lock()
 system_state = {
     'started': False,
+}
+
+# 数据库初始化
+def init_database():
+    try:
+        from config import settings
+        # 构建数据库连接字符串
+        dialect = (settings.DB_DIALECT or "mysql").lower()
+        host = settings.DB_HOST or "localhost"
+        port = str(settings.DB_PORT or ("3306" if dialect == "mysql" else "5432"))
+        user = settings.DB_USER or "root"
+        password = settings.DB_PASSWORD or ""
+        db_name = settings.DB_NAME or "mindspider"
+        
+        if dialect in ("postgresql", "postgres"):
+            database_url = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
+        else:
+            database_url = f"mysql+pymysql://{user}:{password}@{host}:{port}/{db_name}"
+        
+        engine = create_engine(database_url, pool_pre_ping=True, pool_recycle=1800)
+        Session = sessionmaker(bind=engine)
+        
+        # 创建表（如果不存在）
+        Base.metadata.create_all(engine)
+        
+        logger.info("数据库初始化成功")
+        return Session
+    except Exception as e:
+        logger.error(f"数据库初始化失败: {e}")
+        return None
+
+# 初始化数据库会话
+Session = init_database()
     'starting': False,
     'shutdown_in_progress': False
 }
@@ -1582,6 +1619,222 @@ def _format_node_tooltip(node) -> str:
 
 
 # ==================== GraphRAG API 端点结束 ====================
+
+# ==================== 历史记录功能开始 ====================
+
+@app.route('/history')
+def history_page():
+    """历史记录页面"""
+    return render_template('history.html')
+
+
+@app.route('/api/history/list', methods=['GET'])
+def get_history_list():
+    """
+    获取历史记录列表
+    
+    查询参数:
+    - user_id: 用户ID（可选，默认为'default_user'）
+    - page: 页码（可选，默认为1）
+    - per_page: 每页条数（可选，默认为20）
+    """
+    try:
+        if not Session:
+            return jsonify({
+                'success': False,
+                'message': '数据库连接失败'
+            }), 500
+        
+        user_id = request.args.get('user_id', 'default_user')
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 20))
+        
+        # 计算偏移量
+        offset = (page - 1) * per_page
+        
+        with Session() as session:
+            # 查询历史记录，按时间倒序排列
+            query = select(AnalysisHistory).where(
+                AnalysisHistory.user_id == user_id
+            ).order_by(AnalysisHistory.analysis_time.desc())
+            
+            # 获取总数
+            total = session.query(AnalysisHistory).filter(
+                AnalysisHistory.user_id == user_id
+            ).count()
+            
+            # 获取分页数据
+            history_list = session.execute(
+                query.offset(offset).limit(per_page)
+            ).scalars().all()
+            
+            # 转换为字典列表
+            history_data = []
+            for record in history_list:
+                history_data.append({
+                    'id': record.id,
+                    'analysis_content': record.analysis_content,
+                    'report_path': record.report_path,
+                    'report_type': record.report_type,
+                    'status': record.status,
+                    'analysis_time': record.analysis_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'add_ts': record.add_ts
+                })
+            
+            return jsonify({
+                'success': True,
+                'data': history_data,
+                'pagination': {
+                    'page': page,
+                    'per_page': per_page,
+                    'total': total,
+                    'pages': (total + per_page - 1) // per_page
+                }
+            })
+            
+    except Exception as e:
+        logger.exception(f"获取历史记录失败: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'获取历史记录失败: {str(e)}'
+        }), 500
+
+
+@app.route('/api/history/save', methods=['POST'])
+def save_analysis_history():
+    """
+    保存分析历史记录
+    
+    请求体:
+    {
+        "user_id": "用户ID",
+        "analysis_content": "分析内容",
+        "report_path": "报告文件路径",
+        "report_type": "报告类型(html/pdf/md)",
+        "status": "状态(completed/failed)"
+    }
+    """
+    try:
+        if not Session:
+            return jsonify({
+                'success': False,
+                'message': '数据库连接失败'
+            }), 500
+        
+        data = request.get_json() or {}
+        
+        # 必填字段验证
+        required_fields = ['analysis_content', 'report_path']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({
+                    'success': False,
+                    'message': f'缺少必填字段: {field}'
+                }), 400
+        
+        user_id = data.get('user_id', 'default_user')
+        analysis_content = data['analysis_content']
+        report_path = data['report_path']
+        report_type = data.get('report_type', 'html')
+        status = data.get('status', 'completed')
+        
+        # 创建历史记录
+        history_record = AnalysisHistory(
+            user_id=user_id,
+            analysis_content=analysis_content,
+            report_path=report_path,
+            report_type=report_type,
+            status=status,
+            analysis_time=datetime.now(),
+            add_ts=int(time.time())
+        )
+        
+        with Session() as session:
+            session.add(history_record)
+            session.commit()
+            
+            logger.info(f"历史记录已保存: user_id={user_id}, content={analysis_content[:50]}...")
+            
+            return jsonify({
+                'success': True,
+                'message': '历史记录保存成功',
+                'data': {
+                    'id': history_record.id,
+                    'analysis_time': history_record.analysis_time.strftime('%Y-%m-%d %H:%M:%S')
+                }
+            })
+            
+    except Exception as e:
+        logger.exception(f"保存历史记录失败: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'保存历史记录失败: {str(e)}'
+        }), 500
+
+
+@app.route('/api/history/download/<int:history_id>', methods=['GET'])
+def download_history_report(history_id):
+    """下载历史报告文件"""
+    try:
+        if not Session:
+            return jsonify({
+                'success': False,
+                'message': '数据库连接失败'
+            }), 500
+        
+        with Session() as session:
+            # 查询历史记录
+            history_record = session.get(AnalysisHistory, history_id)
+            
+            if not history_record:
+                return jsonify({
+                    'success': False,
+                    'message': '历史记录不存在'
+                }), 404
+            
+            # 检查报告文件是否存在
+            report_path = Path(history_record.report_path)
+            if not report_path.exists():
+                return jsonify({
+                    'success': False,
+                    'message': '报告文件不存在'
+                }), 404
+            
+            # 读取文件内容
+            with open(report_path, 'rb') as f:
+                file_content = f.read()
+            
+            # 根据报告类型设置响应头
+            if history_record.report_type == 'pdf':
+                mimetype = 'application/pdf'
+                filename = f"report_{history_id}.pdf"
+            elif history_record.report_type == 'html':
+                mimetype = 'text/html'
+                filename = f"report_{history_id}.html"
+            elif history_record.report_type == 'md':
+                mimetype = 'text/markdown'
+                filename = f"report_{history_id}.md"
+            else:
+                mimetype = 'application/octet-stream'
+                filename = f"report_{history_id}"
+            
+            return Response(
+                file_content,
+                mimetype=mimetype,
+                headers={
+                    'Content-Disposition': f'attachment; filename={filename}'
+                }
+            )
+            
+    except Exception as e:
+        logger.exception(f"下载报告失败: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'下载报告失败: {str(e)}'
+        }), 500
+
+
+# ==================== 历史记录功能结束 ====================
 
 @socketio.on('connect')
 def handle_connect():

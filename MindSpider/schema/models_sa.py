@@ -9,10 +9,10 @@ MindSpider 数据库ORM模型（SQLAlchemy 2.x）
 from __future__ import annotations
 
 from typing import Optional
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import Integer, String, Text, BigInteger, Date, Float, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Integer, String, Text, BigInteger, Date, DateTime, Float, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.schema import ForeignKeyConstraint
 from sqlalchemy.orm import relationship
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     "DailyTopic",
     "TopicNewsRelation",
     "CrawlingTask",
+    "AnalysisHistory",
 ]
 
 
@@ -49,6 +50,24 @@ class DailyNews(Base):
     rank_position: Mapped[Optional[int]] = mapped_column(Integer)
     add_ts: Mapped[int] = mapped_column(BigInteger, nullable=False)
     last_modify_ts: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class AnalysisHistory(Base):
+    __tablename__ = "analysis_history"
+    __table_args__ = (
+        Index("idx_history_user", "user_id"),
+        Index("idx_history_time", "analysis_time"),
+        Index("idx_history_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    analysis_content: Mapped[str] = mapped_column(String(500), nullable=False)
+    report_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    report_type: Mapped[str] = mapped_column(String(16), default="html")
+    status: Mapped[str] = mapped_column(String(16), default="completed")
+    analysis_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    add_ts: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 class DailyTopic(Base):
