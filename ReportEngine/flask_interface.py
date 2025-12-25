@@ -26,7 +26,6 @@ from .utils.config import settings
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from history_manager import history_manager
 
-
 # 创建Blueprint
 report_bp = Blueprint('report_engine', __name__)
 
